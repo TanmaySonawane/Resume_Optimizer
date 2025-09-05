@@ -19,3 +19,5 @@ python -m venv .venv
 . .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 python -m spacy download en_core_web_lg
+cd backend
+uvicorn main:app --reload
