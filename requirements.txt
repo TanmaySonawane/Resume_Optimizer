@@ -1,0 +1,24 @@
+# ---- API & runtime ----
+fastapi==0.95.2
+uvicorn[standard]==0.22.0
+pydantic==1.10.7
+
+# ---- NLP stack ----
+spacy==3.4.4
+skillNer==1.0.3
+# Install the exact matching spaCy model (3.4.1) for spacy 3.4.x
+https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.4.1/en_core_web_lg-3.4.1-py3-none-any.whl
+# OR python -m spacy download en_core_web_lg
+
+# ---- parsing / utils ----
+python-docx==0.8.11
+pdfplumber==0.9.0
+PyPDF2==3.0.1
+beautifulsoup4==4.12.2
+nltk==3.8.1
+
+# ---- platform-specific ----
+python-magic-bin==0.4.14; sys_platform == "win32"
+numpy==1.23.5
+ipython
+scikit-learn

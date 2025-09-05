@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>About - Resume Optimizer</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <main>
+        <h1>About Resume Optimizer</h1>
+        <p>
+            Resume Optimizer is a web application that analyzes your resume against a provided job description
+            using advanced NLP techniques to provide an ATS (Applicant Tracking System) compatibility score
+            and actionable feedback.
+        </p>
+
+        <h2>How It Works</h2>
+        <ul>
+            <li>Upload your resume (PDF/DOCX) and paste the job description</li>
+            <li>Our system processes your resume and extracts key information including:
+                <ul>
+                    <li>Skills and technologies using SkillNER</li>
+                    <li>Work experience and education history</li>
+                    <li>Formatting and structure analysis</li>
+                </ul>
+            </li>
+            <li>Advanced ATS scoring engine calculates a <strong>comprehensive score</strong> based on:
+                <ul>
+                    <li>Skill matching with the job description</li>
+                    <li>Keyword relevance (TF-IDF with n-grams)</li>
+                    <li>Formatting and ATS-friendly structure</li>
+                    <li>Content organization and readability</li>
+                </ul>
+            </li>
+        </ul>
+
+        <h2>Key Features</h2>
+        <ul>
+            <li><strong>Skill Analysis</strong>: Identifies and categorizes your skills</li>
+            <li><strong>Missing Skills</strong>: Highlights skills from the job description that are missing from your resume</li>
+            <li><strong>Formatting Check</strong>: Ensures your resume is ATS-friendly</li>
+            <li><strong>Actionable Feedback</strong>: Provides specific suggestions for improvement</li>
+        </ul>
+
+        <h2>Why This Matters</h2>
+        <p>
+            Over 75% of resumes are rejected by ATS before they're even seen by a human.
+            This tool helps you optimize your resume to pass through ATS filters and get noticed by recruiters.
+        </p>
+
+        <h2>Version Notes</h2>
+        <p>
+            Current version: 2.0.0<br>
+            - Integrated SkillNER for advanced skill extraction<br>
+            - Improved ATS scoring algorithm<br>
+            - Enhanced formatting analysis
+        </p>
+    </main>
+</body>
+</html>

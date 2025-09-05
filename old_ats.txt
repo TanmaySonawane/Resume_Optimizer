@@ -1,0 +1,373 @@
+# ats_calculator.py
+from skillNer.general_params import SKILL_DB
+import spacy
+from sklearn.feature_extraction.text import TfidfVectorizer
+import re
+from sklearn.metrics.pairwise import cosine_similarity
+from skillNer.skill_extractor_class import SkillExtractor
+from skillNer.general_params import SKILL_DB
+
+nlp = spacy.load("en_core_web_lg")
+
+# Initialize SkillExtractor with default ESCO skills
+skill_extractor = SkillExtractor(nlp, SKILL_DB, PhraseMatcher=spacy.matcher.PhraseMatcher)
+
+class ATSCalculator:
+    """
+    ATSCalculator: Calculates an ATS (Applicant Tracking System) score for a resume vs a job description.
+    Uses spaCy NER to extract skills, compares JD and resume, and evaluates formatting using structure.
+    All skill extraction is dynamic, leveraging spaCy's 'SKILL' entity recognition.
+    
+    Input Validation:
+    - Rejects empty/None inputs
+    - Validates minimum text length (50 chars)
+    - Checks for non-text content (e.g., binary data, excessive special chars)
+    - Validates skill extraction
+    
+    TF-IDF Explanation:
+    - Converts text into numerical vectors where each dimension represents a term's importance
+    - TF (Term Frequency): How often a term appears in a document
+    - IDF (Inverse Document Frequency): Downweights terms that appear frequently across documents
+    - Cosine similarity between JD and resume vectors shows content relevance
+    """
+    MIN_TEXT_LENGTH = 50  # Minimum characters for meaningful analysis
+    MIN_SKILLS_REQUIRED = 1
+    
+    def _validate_text_input(self, text, field_name):
+        """Validate text input for common issues."""
+        if not text or not isinstance(text, str):
+            return False, f"{field_name} is empty or not a string"
+        
+        if len(text.strip()) < self.MIN_TEXT_LENGTH:
+            return False, f"{field_name} is too short (min {self.MIN_TEXT_LENGTH} chars required)"
+            
+        # Check for non-text content (e.g., binary data, excessive special chars)
+        text_ratio = sum(c.isalnum() or c.isspace() for c in text) / len(text)
+        if text_ratio < 0.5:  # Less than 50% alphanumeric
+            return False, f"{field_name} contains too many special characters or binary data"
+            
+        return True, ""
+    
+    def _is_nonsensical(self, text):
+        """Check if text appears to be nonsensical."""
+        # Simple heuristic: check word repetition and average word length
+        words = text.split()
+        if not words:
+            return True
+            
+        # Check for excessive repetition
+        word_counts = {}
+        for word in words:
+            word_counts[word] = word_counts.get(word, 0) + 1
+            if word_counts[word] > len(words) * 0.1:  # More than 10% repetition
+                return True
+                
+        # Check average word length (too short or too long can indicate nonsense)
+        avg_word_len = sum(len(word) for word in words) / len(words)
+        if avg_word_len < 2 or avg_word_len > 15:
+            return True
+            
+        return False
+
+    def __init__(self, jd_text):
+        """
+        Initialize with job description text.
+        The JD text is processed once to extract skills, requirements, and experience needs.
+        
+        Raises:
+            ValueError: If JD text is invalid or nonsensical
+        """
+        # Validate JD text
+        is_valid, error = self._validate_text_input(jd_text, "Job description")
+        if not is_valid:
+            raise ValueError(f"Invalid job description: {error}")
+            
+        if self._is_nonsensical(jd_text):
+            raise ValueError("Job description appears to be nonsensical or random text")
+            
+        self.jd_text = jd_text.lower()
+        self.jd_skills = self._extract_skills(jd_text)
+        self.jd_skill_levels = self._extract_skill_levels(jd_text)
+
+
+    def _extract_skills(self, text):
+        """
+        Extract skills from text using SkillNER.
+        Returns a list of unique, cleaned skill names.
+        """
+        try:
+            annotations = skill_extractor.annotate(text)
+        
+            # Get full matches (exact matches from skill database)
+            full_matches = {
+                item["doc_node_value"].lower().strip()
+                for item in annotations["results"]["full_matches"]
+            }
+        
+            # Get ngram matches with confidence threshold
+            ngram_matches = {
+                item["doc_node_value"].lower().strip()
+                for item in annotations["results"]["ngram_scored"]
+                if item.get("score", 0) > 0.7  # Confidence threshold
+            }
+        
+            # Combine and deduplicate
+            return list(full_matches.union(ngram_matches))
+        
+        except Exception as e:
+            print(f"Error extracting skills: {str(e)}")
+            return []  # Return empty list on error
+
+    def _extract_skill_levels(self, text):
+        """
+        Attempt to extract skill levels (e.g., 'Python (Advanced)') from text.
+        Returns a dict mapping skill to level string.
+        """
+        levels = {}
+        for skill in self._extract_skills(text):
+            # Look for patterns like 'Skill (Level)'
+            m = re.search(rf"{re.escape(skill)}\s*\(([^)]+)\)", text, re.I)
+            if m:
+                levels[skill] = m.group(1).lower()
+        return levels
+
+    def calculate_content_score(self, resume_text):
+        """
+        Compute the content score (60% of ATS total):
+        - TF-IDF similarity (40%): Measures keyword overlap between resume and JD.
+        - Skill gap coverage (20%): Fraction of JD skills present in resume.
+        - Skill level match: Bonus if resume matches JD skill levels (if present).
+        All skill extraction is via spaCy NER, so any recognized skill is valid.
+        """
+        # TF-IDF with n-grams to capture phrases like 'machine learning'
+        vectorizer = TfidfVectorizer(
+            ngram_range=(1, 2),  # Single words and bigrams
+            stop_words='english',  # Remove common words
+            min_df=1,             # Include terms that appear at least once
+            max_df=0.8           # Exclude terms in >80% of docs (if comparing many resumes)
+        )
+
+        # Fit on both JD and resume, transform to vectors
+        tfidf_matrix = vectorizer.fit_transform([self.jd_text, resume_text])
+
+        # Calculate cosine similarity between JD (row 0) and resume (row 1)
+        tfidf_score = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
+        keyword_score = tfidf_score * 0.4  
+
+        # Extract skills from resume
+        resume_skills = set(self._extract_skills(resume_text))
+        # Skill gap: missing required skills
+        missing_skills = set(self.jd_skills) - resume_skills
+        skill_coverage = 1.0 - (len(missing_skills) / max(1, len(self.jd_skills)))
+        skill_score = skill_coverage * 0.2
+
+        # Skill level match (bonus if resume matches JD skill levels)
+        jd_levels = self._extract_skill_levels(self.jd_text)
+        resume_levels = self._extract_skill_levels(resume_text)
+        level_bonus = 0.0
+        for skill, req_level in jd_levels.items():
+            if skill in resume_levels and resume_levels[skill] == req_level:
+                level_bonus += 0.01  # 1% bonus per exact level match
+
+        total_content = keyword_score + skill_score + level_bonus
+        return min(total_content, 0.6)  # Cap at 60%
+
+    def _check_for_disqualifiers(self, resume_structure):
+        """Check for ATS deal-breakers like tables, images, or tiny fonts."""
+        # Check for tables or images in structure
+        if any(item["type"] in ["table", "image"] for item in resume_structure):
+            return False, "Resume contains tables or images which are not ATS-friendly"
+            
+        # Check for contact information using multiple methods
+        has_contact = False
+        contact_info = {
+            'name': False,
+            'email': False,
+            'phone': False,
+            'profile': False
+        }
+        
+        # Regular expressions for different contact info types
+        email_regex = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+        phone_regex = r'(\+\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}'
+        linkedin_regex = r'linkedin\.com/in/[\w-]+'
+        github_regex = r'github\.com/[\w-]+'
+        
+        # Check all content items for contact information
+        for item in resume_structure:
+            content = item.get('content', '').lower()
+            
+            # Check for name (usually at the top of the resume)
+            if not contact_info['name'] and item.get('type') == 'heading' and item.get('content'):
+                # Simple check: if it's a heading at the top with proper name formatting
+                name_parts = item['content'].strip().split()
+                if 2 <= len(name_parts) <= 4 and all(part[0].isupper() for part in name_parts if part):
+                    contact_info['name'] = True
+            
+            # Check for email
+            if re.search(email_regex, content, re.IGNORECASE):
+                contact_info['email'] = True
+                
+            # Check for phone number
+            if re.search(phone_regex, content):
+                contact_info['phone'] = True
+                
+            # Check for LinkedIn or GitHub profiles
+            if re.search(linkedin_regex, content) or re.search(github_regex, content):
+                contact_info['profile'] = True
+        
+        # Determine if we have sufficient contact information
+        has_min_contact = (
+            contact_info['name'] and  # Must have a name
+            (contact_info['email'] or contact_info['phone']) and  # Either email or phone
+            (contact_info['email'] or contact_info['profile'])  # Either email or profile
+        )
+        
+        if not has_min_contact:
+            missing = []
+            if not contact_info['name']: missing.append("name")
+            if not contact_info['email']: missing.append("email")
+            if not contact_info['phone']: missing.append("phone number")
+            if not contact_info['profile']: missing.append("LinkedIn/GitHub profile")
+            
+            return False, f"Insufficient contact information. Missing: {', '.join(missing)}. At minimum include your name and either email or phone number."
+            
+        # Check for reasonable font sizes (if available in structure)
+        font_sizes = [
+            item.get("font_size", 12) 
+            for item in resume_structure 
+            if "font_size" in item
+        ]
+        if font_sizes and min(font_sizes) < 9:  # Reject if any text is smaller than 9pt
+            return False, f"Font size too small (min 9pt required, found {min(font_sizes)}pt)"
+            
+        return True, ""
+
+    def calculate_formatting_score(self, resume_text, resume_structure):
+        """
+        Compute the formatting score (40% of ATS total):
+        - Section Presence (25%): Rewards the presence of `Skills`, `Experience`, and `Education` sections
+        - Bullet Point Optimization (10%):
+          - **Reward**: +0.03 per section (`experience`, `project`, or `education`) with 2+ bullet points
+          - **Penalty**: -0.03 per section with 5+ bullet points (to avoid overloading)
+        - Readability (5%):
+          - Sentence length (3%): Shorter sentences are better
+          - Action verbs (2%): Bullets should start with action verbs
+        """
+        score = 0.0
+        # Section presence and order (from headings in structure)
+        required_sections = ["skills", "experience", "education"]
+        found_sections = [s["content"].lower() for s in resume_structure if s["type"] == "heading"]
+        section_score = 0.0
+        # Reward for presence of each required section, regardless of order
+        for section in required_sections:
+            if section in found_sections:
+                section_score += 0.25 / len(required_sections)
+        score += min(section_score, 0.25)
+        # Readability: bullets (min 2 per experience/project/education section)
+        # Map section headings to their bullet counts
+        section_bullets = {}
+        current_section = None
+        for item in resume_structure:
+            if item["type"] == "heading":
+                heading = item["content"].lower()
+                if heading in ["experience", "project", "projects", "education"]:
+                    current_section = heading
+                    section_bullets[current_section] = 0
+                else:
+                    current_section = None
+            elif item["type"] == "bullet" and current_section:
+                section_bullets[current_section] += 1
+        # Reward or penalize per section
+        for sec, count in section_bullets.items():
+            if count >= 2:
+                score += 0.03  # bonus for minimum bullets in section
+            if count >= 5:
+                score -= 0.03  # penalty for too many bullets in one section
+        # Avg sentence length (from spaCy)
+        doc = nlp(resume_text)
+        sentences = list(doc.sents)
+        avg_len = sum(len([t for t in sent if not t.is_punct]) for sent in sentences) / max(1, len(sentences))
+        if avg_len < 30:
+            score += 0.03
+        # Action verbs: count bullet lines in structure that start with a verb (using spaCy POS)
+        verb_count = 0
+        for s in resume_structure:
+            if s["type"] == "bullet":
+                bullet_doc = nlp(s["content"])
+                first_token = next((t for t in bullet_doc if not t.is_punct and not t.is_space), None)
+                if first_token and first_token.pos_ == "VERB":
+                    verb_count += 1
+        if verb_count >= 3:
+            score += 0.02
+        return min(score, 0.4)
+
+    def _validate_resume_inputs(self, resume_text, resume_structure):
+        """Validate resume inputs before processing."""
+        # Validate resume text
+        is_valid, error = self._validate_text_input(resume_text, "Resume")
+        if not is_valid:
+            return False, f"Invalid resume: {error}"
+            
+        if self._is_nonsensical(resume_text):
+            return False, "Resume appears to be nonsensical or random text"
+            
+        # Validate resume structure
+        if not isinstance(resume_structure, list) or not resume_structure:
+            return False, "Invalid resume structure format"
+            
+        return True, ""
+
+    def total_score(self, resume_text, resume_structure):
+        """
+        Compute the final ATS score as an integer 0-100.
+        Returns 0 if:
+        - Input validation fails
+        - Resume has disqualifying factors
+        - Job description has insufficient skills
+        - Resume has no skills
+        
+        Returns:
+            int: Score from 0-100, or 0 if validation fails
+            str: Empty string if successful, otherwise error message
+        """
+        # Input validation
+        try:
+            is_valid, error = self._validate_resume_inputs(resume_text, resume_structure)
+            if not is_valid:
+                print(f"ATS Rejection: {error}")
+                return 0
+                
+            # Check for disqualifiers
+            is_valid, reason = self._check_for_disqualifiers(resume_structure)
+            if not is_valid:
+                print(f"ATS Rejection: {reason}")
+                return 0
+
+            # Extract and validate skills
+            resume_skills = self._extract_skills(resume_text)
+            
+            if not self.jd_skills:
+                error = "No skills found in job description"
+                print(f"ATS Rejection: {error}")
+                return 0
+                
+            if len(self.jd_skills) < self.MIN_SKILLS_REQUIRED:
+                error = f"Job description requires at least {self.MIN_SKILLS_REQUIRED} skills, found {len(self.jd_skills)}"
+                print(f"ATS Rejection: {error}")
+                return 0
+                
+            if not resume_skills:
+                error = "No skills found in resume"
+                print(f"ATS Rejection: {error}")
+                return 0
+
+            # All validations passed, calculate scores
+            content = self.calculate_content_score(resume_text)
+            formatting = self.calculate_formatting_score(resume_text, resume_structure)
+            return int((content + formatting) * 100)
+            
+        except Exception as e:
+            error = f"Error calculating score: {str(e)}"
+            print(f"ATS Error: {error}")
+            return 0
